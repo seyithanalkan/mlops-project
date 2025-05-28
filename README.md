@@ -71,7 +71,8 @@ resource "aws_s3_bucket_notification" "data_trigger" {
 }
 ```
 
-<!-- Screenshot: Terraform plan/apply output -->
+![Terraform-Apply](https://drive.google.com/thumbnail?id=1nNKzBbWgdEpQm9KDvruDd5c_w6q8Scwb&sz=w1000)  
+
 
 ---
 
@@ -98,31 +99,33 @@ jobs:
 
 1. **check-changes**  
    Uses `git diff` to set outputs: `app_changed`, `train_changed`, `terraform_changed`.  
-   <!-- Screenshot: “Determine What Changed” step -->
+   
 
 2. **terraform**  
    ```bash
    terraform init && terraform plan -out=tfplan && terraform apply -auto-approve tfplan
    ```
    Exports outputs (ECR URLs, ECS names, bucket names) for downstream jobs.  
-   <!-- Screenshot: Terraform Outputs action -->
+   
 
 3. **app-deploy**  
    - Runs `pytest` 
    - Builds & scans serve image (`trivy-action`)  
    - Pushes to ECR & updates ECS service  
-   <!-- Screenshot: Serve image build & push -->
+  
 
 4. **train-deploy**  
    - Runs `pytest`  
    - Builds & pushes train image  
    - Describes existing task def, swaps in new image, registers new revision  
-   <!-- Screenshot: Train task registration -->
+   
 
 5. **generate-data**  
    - Always runs: `generate_data.py` → `data/raw/sales.csv`  
    - Uploads to S3 → triggers EventBridge → fires ECS train task  
-   <!-- Screenshot: Upload to S3 step -->
+   
+![Pipeline-Design](https://drive.google.com/thumbnail?id=1bpNmQBV-FTCGA9BuVPTK2pQCgYGvVOAV&sz=w1000) 
+![Trivy](https://drive.google.com/thumbnail?id=1gLVVrB7FcsXWdkpOp6Gdprx2NxLOSz35&sz=w1000) 
 
 ---
 
@@ -149,7 +152,8 @@ CMD ["uvicorn", "src.serve.app:app", "--host", "0.0.0.0", "--port", "8000"]
 - **train**: includes data generator, feature engineer, training code  
 - **serve**: FastAPI application  
 
-<!-- Screenshot: Docker build output -->
+
+
 
 ---
 
@@ -164,7 +168,8 @@ CMD ["uvicorn", "src.serve.app:app", "--host", "0.0.0.0", "--port", "8000"]
 python scripts/generate_data.py
 ```
 
-<!-- Screenshot: sample rows from sales.csv -->
+![Terraform-Apply](https://drive.google.com/thumbnail?id=1My2P1iPyKu3joX4QOSmkxI9cG25MMIte&sz=w1000)  
+
 
 ---
 
@@ -184,7 +189,11 @@ The ECS train task runs `run_pipeline.sh`, which:
 bash run_pipeline.sh
 ```
 
-<!-- Screenshot: CloudWatch Logs for training steps -->
+![Train-Logs](https://drive.google.com/thumbnail?id=1LkKX2q1EKLBV2KioebVx3Ef5ZXLa6J5E&sz=w1000) 
+![Train-Task](https://drive.google.com/thumbnail?id=1dxKJgFsLZy4aqIVRQ6KDtQ1jwMq45-86&sz=w1000) 
+![Models](https://drive.google.com/thumbnail?id=1ZSdvvWXH5TDm3c07Bu26cZmqzkKJBbW0&sz=w1000)
+![Buckets](https://drive.google.com/thumbnail?id=1TaoTYYk9cPEahy-Jcztl5_071SkkvYxV&sz=w1000)
+
 
 ---
 
@@ -203,8 +212,11 @@ bash run_pipeline.sh
 curl https://<serve-url>/model
 curl -X POST /predict -d '{"lag_1": 300, "rolling_mean_7": 300}'
 ```
+![Serve-Logs](https://drive.google.com/thumbnail?id=1LslWMkoFHBL_N5yzRHhrFiP0nS-y8XjL&sz=w1000) 
+![Serve-Results](https://drive.google.com/thumbnail?id=1qD11evmLjNDcPTtBq3PP6wsjJOV1JIUx&sz=w1000) 
 
-<!-- Screenshot: OpenAPI docs (/docs) -->
+
+
 
 ---
 
@@ -219,7 +231,7 @@ curl -X POST /predict -d '{"lag_1": 300, "rolling_mean_7": 300}'
 pytest --maxfail=1 --disable-warnings -q
 ```
 
-<!-- Screenshot: pytest summary -->
+![Python-Test](https://drive.google.com/thumbnail?id=1iCnwnKpsFi4LUr3qEk8Mp4inridtjY6b&sz=w1000)  
 
 ---
 
@@ -235,7 +247,8 @@ resource "aws_s3_bucket_notification" "data_trigger" {
 }
 ```
 
-<!-- Screenshot: EventBridge rule in AWS Console -->
+![Event-Bridge](https://drive.google.com/thumbnail?id=11AFwIqAlCMUv0PAS_thoccdHIcW_XbC0&sz=w1000)  
+
 
 ---
 
@@ -245,7 +258,6 @@ resource "aws_s3_bucket_notification" "data_trigger" {
 - **X-Process-Time** and **X-Request-ID** headers for latency tracing  
 - **GitHub Actions** insights: test coverage, static analysis, container scan results  
 
-<!-- Screenshot: CloudWatch dashboard & GitHub Actions insights -->
 
 
 ---
@@ -257,4 +269,8 @@ resource "aws_s3_bucket_notification" "data_trigger" {
 - **Scalability** with ECS Fargate  
 - **Robustness**: input validation, fallback mechanisms, CI/CD gates  
 
+
+## 13. Remove
+
+![Terraform-Destroy](https://drive.google.com/thumbnail?id=1twZ2_M80KuW2kljZrnrYbeqAsJsbutJB&sz=w1000)
 
