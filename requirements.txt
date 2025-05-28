@@ -1,0 +1,27 @@
+# Data handling
+pandas
+numpy
+
+
+# ML & Forecasting
+scikit-learn
+tensorflow
+prophet
+
+# Visualization
+matplotlib
+seaborn
+
+# Utilities
+pyyaml
+
+# Testing
+pytest
+
+# Serving
+fastapi
+uvicorn[standard]
+httpx
+
+# AWS SDK (optional)
+boto3

@@ -1,0 +1,4 @@
+raw_data_path:       s3://${RAW_BUCKET}/data/raw/sales.csv
+processed_data_path: s3://${PROCESSED_BUCKET}/data/processed/sales_processed.csv
+feature_data_path:   s3://${PROCESSED_BUCKET}/data/processed/features.csv
+model_path:          s3://${MODEL_BUCKET}/models/lstm_model.h5

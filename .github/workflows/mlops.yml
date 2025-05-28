@@ -1,0 +1,339 @@
+name: 🚀 MLOps • App & Train
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  id-token: write
+
+
+env:
+  AWS_REGION: eu-west-1
+  TERRAFORM_VERSION: "1.12.0"
+
+jobs:
+  check-changes:
+    name: 🔍 Determine What Changed
+    runs-on: ubuntu-latest
+    outputs:
+      app_changed:       ${{ steps.paths.outputs.app_changed }}
+      train_changed:     ${{ steps.paths.outputs.train_changed }}
+      terraform_changed: ${{ steps.paths.outputs.terraform_changed }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Inspect changed files
+        id: paths
+        run: |
+          BEFORE=${{ github.event.before }}
+          AFTER=${{ github.sha }}
+          
+          if [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+            echo "🆕 Initial commit — considering every file changed"
+            CHANGED=$(git ls-files)
+          else
+            CHANGED=$(git diff --name-only "$BEFORE" "$AFTER")
+          fi
+
+          echo "→ all changed files:"
+          echo "$CHANGED"
+
+          APP_MATCH=$(echo "$CHANGED" | grep -E '^(src/serve/.*|tests/.*|Dockerfile)' | tr '\n' ' ' || true)
+          TRAIN_MATCH=$(echo "$CHANGED" | grep -E '^(src/models/.*|scripts/.*|tests/.*|Dockerfile)' | tr '\n' ' ' || true)
+          TF_MATCH=$(echo "$CHANGED" | grep -E '^terraform/.*\.tf' | tr '\n' ' ' || true)
+
+          echo "app=\"$APP_MATCH\"" > tmp
+          echo "train=\"$TRAIN_MATCH\"" >> tmp
+          echo "terraform=\"$TF_MATCH\"" >> tmp
+          source tmp
+
+          echo "app_changed=${app:+true}"       >> $GITHUB_OUTPUT
+          echo "train_changed=${train:+true}"   >> $GITHUB_OUTPUT
+          echo "terraform_changed=${terraform:+true}" >> $GITHUB_OUTPUT
+
+
+
+
+  terraform:
+    name: 🌐 Terraform • Plan/Apply & Outputs
+    runs-on: ubuntu-latest
+    needs:
+      - check-changes
+    outputs:
+      ecr_serve_url:             ${{ steps.tf-outputs.outputs.ecr_serve_url }}
+      ecr_train_url:             ${{ steps.tf-outputs.outputs.ecr_train_url }}
+      serve_task_definition_arn: ${{ steps.tf-outputs.outputs.serve_task_definition_arn }}
+      train_task_definition_arn: ${{ steps.tf-outputs.outputs.train_task_definition_arn }}
+      ecs_cluster_name:          ${{ steps.tf-outputs.outputs.ecs_cluster_name }}
+      serve_service_name:        ${{ steps.tf-outputs.outputs.serve_service_name }}
+      raw_bucket_name:           ${{ steps.tf-outputs.outputs.raw_bucket_name }}
+      processed_bucket_name:     ${{ steps.tf-outputs.outputs.processed_bucket_name }}
+      model_bucket_name:         ${{ steps.tf-outputs.outputs.model_bucket_name }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v3
+        with:
+          aws-region:     ${{ env.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_CICD_ROLE_ARN }}
+
+      - name: Setup Terraform CLI
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: No-op if no infra changes
+        if: ${{ needs.check-changes.outputs.terraform_changed != 'true' }}
+        run: echo "✅ No Terraform changes detected — skipping plan & apply"
+
+      - name: Initialize Terraform
+        if: ${{ needs.check-changes.outputs.terraform_changed == 'true' }}
+        working-directory: terraform/dev
+        run: terraform init -input=false
+
+      - name: Terraform Plan
+        if: ${{ needs.check-changes.outputs.terraform_changed == 'true' }}
+        working-directory: terraform/dev
+        run: terraform plan -out=tfplan -input=false
+
+      - name: Terraform Apply
+        if: ${{ needs.check-changes.outputs.terraform_changed == 'true' }}
+        working-directory: terraform/dev
+        run: terraform apply -auto-approve tfplan
+
+      - name: Fetch Terraform outputs
+        id: tf-outputs
+        working-directory: terraform/dev
+        run: |
+          terraform init -input=false
+          echo "ecr_serve_url=$(terraform output -raw ecr_serve_url)"                       >> $GITHUB_OUTPUT
+          echo "ecr_train_url=$(terraform output -raw ecr_train_url)"                       >> $GITHUB_OUTPUT
+          echo "serve_task_definition_arn=$(terraform output -raw serve_task_definition_arn)" >> $GITHUB_OUTPUT
+          echo "train_task_definition_arn=$(terraform output -raw train_task_definition_arn)" >> $GITHUB_OUTPUT
+          echo "ecs_cluster_name=$(terraform output -raw ecs_cluster_name)"                 >> $GITHUB_OUTPUT
+          echo "serve_service_name=$(terraform output -raw serve_service_name)"             >> $GITHUB_OUTPUT
+          echo "raw_bucket_name=$(terraform output -raw raw_bucket_name)"                   >> $GITHUB_OUTPUT
+          echo "processed_bucket_name=$(terraform output -raw processed_bucket_name)"       >> $GITHUB_OUTPUT
+          echo "model_bucket_name=$(terraform output -raw model_bucket_name)"               >> $GITHUB_OUTPUT
+
+  app-deploy:
+    name: 📦 Serve • Build & Deploy
+    needs:
+      - check-changes
+      - terraform
+    if: ${{ needs.check-changes.outputs.app_changed == 'true' && needs.terraform.outputs.ecr_serve_url != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.10.x'
+          
+      - name: Render config.yaml from template
+        run: |
+         export RAW_BUCKET=${{ needs.terraform.outputs.raw_bucket_name }}
+         export PROCESSED_BUCKET=${{ needs.terraform.outputs.processed_bucket_name }}
+         export MODEL_BUCKET=${{ needs.terraform.outputs.model_bucket_name }}
+         envsubst < config/config.template.yaml > config/config.yaml
+         echo "--- Generated config/config.yaml ---"
+         cat config/config.yaml
+
+      - name: Install pytest
+        run: pip install -r requirements.txt
+      
+      - name: Set PYTHONPATH for tests
+        run: echo "PYTHONPATH=${{ github.workspace }}" >> $GITHUB_ENV
+
+      - name: 🧪 Run Python unit tests
+        run: pytest --maxfail=1 --disable-warnings -q
+
+      
+
+      - name: Configure AWS creds
+        uses: aws-actions/configure-aws-credentials@v3
+        with:
+          aws-region:     ${{ env.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_CICD_ROLE_ARN }}
+
+
+      - name: Skip if no serve changes
+        if: ${{ needs.check-changes.outputs.app_changed != 'true' }}
+        run: echo "ℹ️ No serve changes detected — skipping"
+
+      - name: Set serve env vars
+        run: |
+          echo "SERVE_URL=${{ needs.terraform.outputs.ecr_serve_url }}"                  >> $GITHUB_ENV
+          echo "SERVE_TASK_DEF=${{ needs.terraform.outputs.serve_task_definition_arn }}" >> $GITHUB_ENV
+          echo "CLUSTER=${{ needs.terraform.outputs.ecs_cluster_name }}"                >> $GITHUB_ENV
+          echo "SERVICE=${{ needs.terraform.outputs.serve_service_name }}"              >> $GITHUB_ENV
+
+      - name: Login to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build & push serve image
+        run: |
+          docker build --target serve \
+            -t "${SERVE_URL}:${{ github.sha }}" \
+            -t "${SERVE_URL}:dev" \
+            -f Dockerfile .
+          docker push "${SERVE_URL}:${{ github.sha }}"
+          docker push "${SERVE_URL}:dev"
+
+      - name: 🐳 Trivy container scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: image
+          image-ref: "${{ needs.terraform.outputs.ecr_serve_url }}:dev"
+      - name: Deploy to ECS
+        run: |
+          LATEST_TASK_DEF_ARN=$(
+            aws ecs describe-task-definition \
+              --task-definition "$SERVE_TASK_DEF" \
+              --query 'taskDefinition.taskDefinitionArn' \
+              --output text
+          )
+          aws ecs update-service \
+            --cluster "$CLUSTER" \
+            --service "$SERVICE" \
+            --task-definition "$LATEST_TASK_DEF_ARN" \
+            --force-new-deployment
+
+  train-deploy:
+    name: 🐶 Train • Register Task Definition & Generate Data
+    needs:
+      - check-changes
+      - terraform
+    if: ${{ needs.check-changes.outputs.train_changed == 'true' && needs.terraform.outputs.ecr_train_url != '' }}  
+    runs-on: ubuntu-latest
+    env:
+      TRAIN_TRIGGER_BUCKET: ${{ needs.terraform.outputs.raw_bucket_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.10.x'
+
+      
+      - name: Render config.yaml from template
+        run: |
+         export RAW_BUCKET=${{ needs.terraform.outputs.raw_bucket_name }}
+         export PROCESSED_BUCKET=${{ needs.terraform.outputs.processed_bucket_name }}
+         export MODEL_BUCKET=${{ needs.terraform.outputs.model_bucket_name }}
+         envsubst < config/config.template.yaml > config/config.yaml
+         echo "--- Generated config/config.yaml ---"
+         cat config/config.yaml
+
+
+      - name: Install pytest
+        run: pip install -r requirements.txt
+      - name: Set PYTHONPATH for tests
+        run: echo "PYTHONPATH=${{ github.workspace }}" >> $GITHUB_ENV
+      - name: 🧪 Run Python unit tests
+        run: pytest --maxfail=1 --disable-warnings -q
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v3
+        with:
+          aws-region:     ${{ env.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_CICD_ROLE_ARN }}
+
+
+      - name: Skip if no train changes
+        if: ${{ needs.check-changes.outputs.train_changed != 'true' }}
+        run: echo "ℹ️ No train changes detected — skipping"
+
+      - name: Set train variables
+        run: |
+          echo "TRAIN_TASK_DEF=${{ needs.terraform.outputs.train_task_definition_arn }}" >> $GITHUB_ENV
+          echo "TRAIN_ECR_URL=${{ needs.terraform.outputs.ecr_train_url }}"             >> $GITHUB_ENV
+
+      - name: Login to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build & push train image
+        run: |
+          docker build --target train \
+            -t "${TRAIN_ECR_URL}:${{ github.sha }}" \
+            -t "${TRAIN_ECR_URL}:dev" \
+            -f Dockerfile .
+          docker push "${TRAIN_ECR_URL}:${{ github.sha }}"
+          docker push "${TRAIN_ECR_URL}:dev"
+
+      - name: Register new train task definition
+        id: register-train
+        run: |
+          TRAIN_TASK_DEF="${TRAIN_TASK_DEF}"
+          IMG_TAG="${TRAIN_ECR_URL}:${{ github.sha }}"
+          REGISTER_JSON=$(
+            aws ecs describe-task-definition \
+              --task-definition "$TRAIN_TASK_DEF" \
+              --query 'taskDefinition' \
+              --output json \
+            | jq --arg img "$IMG_TAG" '
+                .containerDefinitions |= map(
+                  if .name=="mlops-train" then .image = $img else . end
+                )
+              | del(
+                  .taskDefinitionArn,
+                  .revision,
+                  .status,
+                  .requiresAttributes,
+                  .compatibilities,
+                  .registeredAt,
+                  .registeredBy,
+                  .tags
+                )
+            '
+          )
+          NEW_ARN=$(
+            aws ecs register-task-definition \
+              --cli-input-json "$REGISTER_JSON" \
+              --query 'taskDefinition.taskDefinitionArn' \
+              --output text
+          )
+          echo "new_train_task_definition_arn=$NEW_ARN" >> $GITHUB_OUTPUT
+
+  generate-data:
+    name: 📊 Generate & Upload Data
+    if: ${{ always() }}
+    needs:
+      - app-deploy
+      - train-deploy
+      - terraform
+    runs-on: ubuntu-latest
+    env:
+      TRAIN_TRIGGER_BUCKET: ${{ needs.terraform.outputs.raw_bucket_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.10.x'
+
+      - name: Install pytest
+        run: pip install pandas numpy
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v3
+        with:
+          aws-region:     ${{ env.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_CICD_ROLE_ARN }}
+
+      - name: Generate dummy sales data
+        run: python scripts/generate_data.py
+
+      - name: Upload raw sales data to S3 with unique timestamp
+        run: |
+          TIMESTAMP=$(date +%Y%m%d%H%M%S)
+          aws s3 cp data/raw/sales.csv \
+            s3://$TRAIN_TRIGGER_BUCKET/data/raw/sales.csv

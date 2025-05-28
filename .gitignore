@@ -1,0 +1,43 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+.env.*
+
+.pytest_cache/
+.ipynb_checkpoints/
+
+# ---- Data & Models ----
+data/raw/
+data/processed/
+models/
+!src/models/  
+
+# ---- Logs ----
+*.log
+
+# ---- Docker ----
+.dockerignore
+docker-compose*.yml
+
+# ---- Terraform ----
+terraform/**/.terraform/
+terraform/**/*.tfstate
+terraform/**/*.tfstate.*
+terraform/crash.log
+terraform/**/*.tfplan
+
+# Eğer özel tfvars’ları repoya almak istiyorsanız
+# burada *.tfvars satırını yorum satırı yaptık:
+# *.tfvars
+# ancak belirli bir dosyayı (örn. prod veya dev auto tfvars) whitelist edebilirsiniz:
+!terraform/dev/dev.auto.tfvars
+!terraform/prod/prod.auto.tfvars
+
+# ---- IDE & OS ----
+.DS_Store
+.vscode/
+.idea/
+*~
